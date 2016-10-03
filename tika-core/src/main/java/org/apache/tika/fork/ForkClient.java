@@ -99,6 +99,10 @@ class ForkClient {
             output.writeByte(ForkServer.PING);
             output.flush();
             while (true) {
+                if (Thread.currentThread().isInterrupted()) {
+                    this.close();
+                    throw new IllegalStateException("time out");
+                }
                 consumeErrorStream();
                 int type = input.read();
                 if (type == ForkServer.PING) {
