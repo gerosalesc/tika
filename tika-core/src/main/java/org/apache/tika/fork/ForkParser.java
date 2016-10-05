@@ -177,6 +177,7 @@ public class ForkParser extends AbstractParser {
             throw te;
         } catch (IOException e) {
             // Problem occurred on the other side
+            alive = false;
             throw new TikaException(
                     "Failed to communicate with a forked parser process."
                     + " The process has most likely crashed due to some error"
