@@ -85,6 +85,7 @@ class ForkClient {
 
     private void waitForStartBeacon() throws IOException {
         while (true) {
+            checkInterruption();
             consumeErrorStream();
             int type = input.read();
             if ((byte) type == ForkServer.READY) {
@@ -99,10 +100,7 @@ class ForkClient {
             output.writeByte(ForkServer.PING);
             output.flush();
             while (true) {
-                if (Thread.currentThread().isInterrupted()) {
-                    this.close();
-                    throw new IllegalStateException("time out");
-                }
+                checkInterruption();
                 consumeErrorStream();
                 int type = input.read();
                 if (type == ForkServer.PING) {
@@ -177,17 +175,32 @@ class ForkClient {
         } catch (IOException ignore) {
         }
         if (process != null) {
-            process.destroy();
+            if(killProcess(process::destroy)){
+                if(killProcess(process::destroyForcibly)){
+                    System.out.println(String.format("Could not kill process"));
+                }
+            }
         }
         if (jar != null) {
             jar.delete();
         }
     }
 
+    private boolean killProcess(Runnable action){
+        try{
+            action.run();
+        }catch (Exception e){}
+        try {
+            Thread.sleep(1000);
+        } catch (InterruptedException e) {}
+        return process.isAlive();
+    }
+
     private Throwable waitForResponse(List<ForkResource> resources)
             throws IOException {
         output.flush();
         while (true) {
+            checkInterruption();
             consumeErrorStream();
             int type = input.read();
             if (type == -1) {
@@ -285,6 +298,14 @@ class ForkClient {
                     IOUtils.copy(input, jar);
                 }
             }
+        }
+    }
+
+    private void checkInterruption(){
+        boolean interrupted = Thread.currentThread().isInterrupted();
+        if (interrupted) {
+            this.close();
+            throw new IllegalStateException("Interrupted");
         }
     }
 
