@@ -25,6 +25,7 @@ import java.io.InputStream;
 import java.io.NotSerializableException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import java.util.zip.ZipEntry;
@@ -100,7 +101,6 @@ class ForkClient {
             output.writeByte(ForkServer.PING);
             output.flush();
             while (true) {
-                checkInterruption();
                 consumeErrorStream();
                 int type = input.read();
                 if (type == ForkServer.PING) {
@@ -175,8 +175,8 @@ class ForkClient {
         } catch (IOException ignore) {
         }
         if (process != null) {
-            if(killProcess(process::destroy)){
-                if(killProcess(process::destroyForcibly)){
+            if(killProcess(process::destroy, 100)){
+                if(killProcess(process::destroyForcibly, 50)){
                     System.out.println(String.format("Could not kill process"));
                 }
             }
@@ -186,12 +186,13 @@ class ForkClient {
         }
     }
 
-    private boolean killProcess(Runnable action){
+    private boolean killProcess(Runnable action, int wait){
         try{
             action.run();
         }catch (Exception e){}
         try {
-            Thread.sleep(1000);
+            //TIKA-1933
+            process.waitFor(wait, TimeUnit.MICROSECONDS);
         } catch (InterruptedException e) {}
         return process.isAlive();
     }
@@ -200,7 +201,6 @@ class ForkClient {
             throws IOException {
         output.flush();
         while (true) {
-            checkInterruption();
             consumeErrorStream();
             int type = input.read();
             if (type == -1) {
