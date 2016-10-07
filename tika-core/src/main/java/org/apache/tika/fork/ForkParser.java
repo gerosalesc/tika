@@ -25,6 +25,10 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Queue;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeoutException;
 
 import org.apache.tika.exception.TikaException;
 import org.apache.tika.metadata.Metadata;
@@ -53,6 +57,8 @@ public class ForkParser extends AbstractParser {
     private int poolSize = 5;
 
     private int currentlyInUse = 0;
+
+    private ExecutorService communicationPool = Executors.newFixedThreadPool(poolSize);
 
     private final Queue<ForkClient> pool =
         new LinkedList<ForkClient>();
@@ -93,6 +99,7 @@ public class ForkParser extends AbstractParser {
      */
     public synchronized void setPoolSize(int poolSize) {
         this.poolSize = poolSize;
+        this.communicationPool = Executors.newFixedThreadPool(poolSize);
     }
 
     /**
@@ -175,7 +182,7 @@ public class ForkParser extends AbstractParser {
             // Problem occurred on our side
             alive = true;
             throw te;
-        } catch (IOException e) {
+        } catch (IOException | ExecutionException e) {
             // Problem occurred on the other side
             alive = false;
             throw new TikaException(
@@ -183,6 +190,10 @@ public class ForkParser extends AbstractParser {
                     + " The process has most likely crashed due to some error"
                     + " like running out of memory. A new process will be"
                     + " started for the next parsing request.", e);
+        } catch (TimeoutException | InterruptedException e) {
+            System.out.println("Parser  call timeout");
+            alive = false;
+            throw new TikaException("Timeout", e);
         } finally {
             releaseClient(client, alive);
         }
@@ -214,13 +225,25 @@ public class ForkParser extends AbstractParser {
 
             // Create a new process if there's room in the pool
             if (client == null && currentlyInUse < poolSize) {
-                client = new ForkClient(loader, parser, java);
+                try {
+                    client = new ForkClient(loader, parser, java, communicationPool);
+                } catch (TimeoutException | InterruptedException | ExecutionException e) {
+                    client = null;
+                }
             }
 
             // Ping the process, and get rid of it if it's inactive
-            if (client != null && !client.ping()) {
-                client.close();
-                client = null;
+
+            if (client != null) {
+                boolean ping = false;
+                try {
+                    ping = client.ping(10000, false);
+                } catch (TimeoutException | InterruptedException | ExecutionException ignore) {}
+
+                if(!ping){
+                    client.close();
+                    client = null;
+                }
             }
 
             if (client != null) {
@@ -240,6 +263,7 @@ public class ForkParser extends AbstractParser {
     private synchronized void releaseClient(ForkClient client, boolean alive) {
         currentlyInUse--;
         if (currentlyInUse + pool.size() < poolSize && alive) {
+            System.out.println("#releaseClient offering client");
             pool.offer(client);
             notifyAll();
         } else {

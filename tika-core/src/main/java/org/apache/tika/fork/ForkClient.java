@@ -25,7 +25,7 @@ import java.io.InputStream;
 import java.io.NotSerializableException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import java.util.zip.ZipEntry;
@@ -52,11 +52,14 @@ class ForkClient {
 
     private final InputStream error;
 
-    public ForkClient(ClassLoader loader, Object object, List<String> java)
-            throws IOException, TikaException {
+    private final ExecutorService pool;
+
+    public ForkClient(ClassLoader loader, Object object, List<String> java, ExecutorService pool)
+            throws IOException, TikaException, TimeoutException, ExecutionException, InterruptedException {
         boolean ok = false;
         try {
             this.loader = loader;
+            this.pool = pool;
             this.jar = createBootstrapJar();
 
             ProcessBuilder builder = new ProcessBuilder();
@@ -72,11 +75,11 @@ class ForkClient {
             this.error = process.getErrorStream();
 
             waitForStartBeacon();
-
             sendObject(loader, resources);
             sendObject(object, resources);
-
             ok = true;
+
+
         } finally {
             if (!ok) {
                 close();
@@ -84,19 +87,23 @@ class ForkClient {
         }
     }
 
-    private void waitForStartBeacon() throws IOException {
+    private boolean waitForStartBeacon() throws IOException {
         while (true) {
-            checkInterruption();
             consumeErrorStream();
             int type = input.read();
             if ((byte) type == ForkServer.READY) {
                 consumeErrorStream();
-                return;
+                break;
             }
         }
+        return true;
     }
 
-    public synchronized boolean ping() {
+    public synchronized boolean ping(int timeout, boolean timeoutResult) throws TimeoutException, ExecutionException, InterruptedException {
+        return (boolean) timedAction(this::ping, timeout, timeoutResult);
+    }
+
+    public boolean ping() {
         try {
             output.writeByte(ForkServer.PING);
             output.flush();
@@ -115,16 +122,16 @@ class ForkClient {
         }
     }
 
-
     public synchronized Throwable call(String method, Object... args)
-            throws IOException, TikaException {
+            throws IOException, TikaException, TimeoutException, ExecutionException, InterruptedException {
         List<ForkResource> r = new ArrayList<ForkResource>(resources);
         output.writeByte(ForkServer.CALL);
         output.writeUTF(method);
         for (int i = 0; i < args.length; i++) {
             sendObject(args[i], r);
         }
-        return waitForResponse(r);
+        Object response = timedAction(() -> waitForResponse(r), 10000, null);
+        return (response == null) ? null : (Throwable) response;
     }
 
     /**
@@ -136,7 +143,7 @@ class ForkClient {
      * @throws IOException if the object could not be serialized
      */
     private void sendObject(Object object, List<ForkResource> resources)
-            throws IOException, TikaException {
+            throws IOException, TikaException, TimeoutException, ExecutionException, InterruptedException {
         int n = resources.size();
         if (object instanceof InputStream) {
             resources.add(new InputStreamResource((InputStream) object));
@@ -158,22 +165,32 @@ class ForkClient {
                  " to pass to the Forked Parser", nse);
         }
 
-        waitForResponse(resources);
+        Callable<Throwable> waitForResponse = () -> waitForResponse(resources);
+        timedAction(waitForResponse, 10000, null);
     }
 
     public synchronized void close() {
-        try {
-            if (output != null) {
+        System.out.println("#closing client 1 ");
+        if (output != null) {
+            ignorableAction(() -> {
                 output.close();
-            }
-            if (input != null) {
-                input.close();
-            }
-            if (error != null) {
-                error.close();
-            }
-        } catch (IOException ignore) {
+                return true;
+            });
         }
+        if (input != null) {
+            ignorableAction(() -> {
+                input.close();
+                return true;
+            });
+        }
+        if (error != null) {
+            ignorableAction(() -> {
+                error.close();
+                return true;
+            });
+        }
+
+        System.out.println(String.format("#closing 2 %s", process.toString()));
         if (process != null) {
             if(killProcess(process::destroy, 100)){
                 if(killProcess(process::destroyForcibly, 50)){
@@ -201,6 +218,7 @@ class ForkClient {
             throws IOException {
         output.flush();
         while (true) {
+            checkInterruption();
             consumeErrorStream();
             int type = input.read();
             if (type == -1) {
@@ -307,6 +325,20 @@ class ForkClient {
             this.close();
             throw new IllegalStateException("Interrupted");
         }
+    }
+
+    private void ignorableAction(Callable<?> call){
+        try {
+            timedAction(call, 1000, true);
+        } catch (TimeoutException | ExecutionException | InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private Object timedAction(Callable<?> action, int timeout, Object defaultResult) throws TimeoutException, ExecutionException, InterruptedException {
+        Future<?> futureRead = pool.submit(action);
+        Object result = futureRead.get(timeout, TimeUnit.MILLISECONDS);
+        return result;
     }
 
 }

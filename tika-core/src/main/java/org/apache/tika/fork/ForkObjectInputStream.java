@@ -87,6 +87,7 @@ class ForkObjectInputStream extends ObjectInputStream {
         byte[] data = buffer.toByteArray();
         output.writeInt(data.length);
         output.write(data);
+        output.flush();
     }
 
     /**
