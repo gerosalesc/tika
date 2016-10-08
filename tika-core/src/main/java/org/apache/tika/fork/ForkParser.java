@@ -58,6 +58,8 @@ public class ForkParser extends AbstractParser {
 
     private int currentlyInUse = 0;
 
+    private int timeout = 30000;
+
     private ExecutorService communicationPool = Executors.newFixedThreadPool(poolSize);
 
     private final Queue<ForkClient> pool =
@@ -163,6 +165,14 @@ public class ForkParser extends AbstractParser {
 
     public void parse(
             InputStream stream, ContentHandler handler,
+            Metadata metadata, ParseContext context, int timeout)
+            throws IOException, SAXException, TikaException {
+        this.timeout = timeout;
+        parse(stream, handler, metadata, context);
+    }
+
+    public void parse(
+            InputStream stream, ContentHandler handler,
             Metadata metadata, ParseContext context)
             throws IOException, SAXException, TikaException {
         if (stream == null) {
@@ -176,7 +186,7 @@ public class ForkParser extends AbstractParser {
         try {
             ContentHandler tee = new TeeContentHandler(
                     handler, new MetadataContentHandler(metadata));
-            t = client.call("parse", stream, tee, metadata, context);
+            t = client.call("parse", timeout, stream, tee, metadata, context);
             alive = true;
         } catch (TikaException te) {
             // Problem occurred on our side
@@ -263,7 +273,6 @@ public class ForkParser extends AbstractParser {
     private synchronized void releaseClient(ForkClient client, boolean alive) {
         currentlyInUse--;
         if (currentlyInUse + pool.size() < poolSize && alive) {
-            System.out.println("#releaseClient offering client");
             pool.offer(client);
             notifyAll();
         } else {

@@ -122,7 +122,7 @@ class ForkClient {
         }
     }
 
-    public synchronized Throwable call(String method, Object... args)
+    public synchronized Throwable call(String method, int timeout, Object... args)
             throws IOException, TikaException, TimeoutException, ExecutionException, InterruptedException {
         List<ForkResource> r = new ArrayList<ForkResource>(resources);
         output.writeByte(ForkServer.CALL);
@@ -130,7 +130,7 @@ class ForkClient {
         for (int i = 0; i < args.length; i++) {
             sendObject(args[i], r);
         }
-        Object response = timedAction(() -> waitForResponse(r), 10000, null);
+        Object response = timedAction(() -> waitForResponse(r), timeout, null);
         return (response == null) ? null : (Throwable) response;
     }
 
@@ -170,7 +170,6 @@ class ForkClient {
     }
 
     public synchronized void close() {
-        System.out.println("#closing client 1 ");
         if (output != null) {
             ignorableAction(() -> {
                 output.close();
@@ -190,7 +189,6 @@ class ForkClient {
             });
         }
 
-        System.out.println(String.format("#closing 2 %s", process.toString()));
         if (process != null) {
             if(killProcess(process::destroy, 100)){
                 if(killProcess(process::destroyForcibly, 50)){
